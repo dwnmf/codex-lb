@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import AsyncIterator
+from typing import cast
 
 from fastapi import APIRouter, Body, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -13,6 +15,7 @@ from app.core.openai.chat_responses import collect_chat_completion, stream_chat_
 from app.core.openai.models_catalog import MODEL_CATALOG
 from app.core.openai.requests import ResponsesCompactRequest, ResponsesRequest
 from app.core.openai.v1_requests import V1ResponsesCompactRequest, V1ResponsesRequest
+from app.core.types import JsonValue
 from app.dependencies import ProxyContext, get_proxy_context
 from app.modules.proxy.schemas import RateLimitStatusPayload
 
@@ -36,7 +39,10 @@ async def v1_responses(
     payload: V1ResponsesRequest = Body(...),
     context: ProxyContext = Depends(get_proxy_context),
 ) -> Response:
-    return await _stream_responses(request, payload.to_responses_request(), context)
+    responses_payload = payload.to_responses_request()
+    if responses_payload.stream:
+        return await _stream_responses(request, responses_payload, context)
+    return await _collect_responses(request, responses_payload, context)
 
 
 @v1_router.get("/models")
@@ -78,8 +84,10 @@ async def v1_chat_completions(
 
     stream_with_first = _prepend_first(first, stream)
     if payload.stream:
+        stream_options = payload.stream_options
+        include_usage = bool(stream_options and stream_options.include_usage)
         return StreamingResponse(
-            stream_chat_chunks(stream_with_first, model=payload.model),
+            stream_chat_chunks(stream_with_first, model=payload.model, include_usage=include_usage),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", **rate_limit_headers},
         )
@@ -119,6 +127,30 @@ async def _stream_responses(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", **rate_limit_headers},
     )
+
+
+async def _collect_responses(
+    request: Request,
+    payload: ResponsesRequest,
+    context: ProxyContext,
+) -> Response:
+    rate_limit_headers = await context.service.rate_limit_headers()
+    stream = context.service.stream_responses(
+        payload,
+        request.headers,
+        propagate_http_errors=True,
+    )
+    try:
+        response_payload = await _collect_responses_payload(stream)
+    except ProxyResponseError as exc:
+        return JSONResponse(status_code=exc.status_code, content=exc.payload, headers=rate_limit_headers)
+    if (
+        isinstance(response_payload, dict)
+        and "error" in response_payload
+        and response_payload.get("object") != "response"
+    ):
+        return JSONResponse(status_code=502, content=response_payload, headers=rate_limit_headers)
+    return JSONResponse(content=response_payload, headers=rate_limit_headers)
 
 
 @router.post("/responses/compact")
@@ -168,3 +200,34 @@ async def _prepend_first(first: str | None, stream: AsyncIterator[str]) -> Async
         yield first
     async for line in stream:
         yield line
+
+
+def _parse_sse_payload(line: str) -> dict[str, JsonValue] | None:
+    if not line.startswith("data:"):
+        return None
+    data = line[5:].strip()
+    if not data or data == "[DONE]":
+        return None
+    try:
+        payload = json.loads(data)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+async def _collect_responses_payload(stream: AsyncIterator[str]) -> dict[str, JsonValue]:
+    response_payload: dict[str, JsonValue] | None = None
+    async for line in stream:
+        payload = _parse_sse_payload(line)
+        if not payload:
+            continue
+        event_type = payload.get("type")
+        if event_type in ("response.completed", "response.incomplete", "response.failed"):
+            response = payload.get("response")
+            if isinstance(response, dict):
+                response_payload = cast(dict[str, JsonValue], response)
+    if response_payload is not None:
+        return response_payload
+    return cast(dict[str, JsonValue], openai_error("upstream_error", "Upstream error"))

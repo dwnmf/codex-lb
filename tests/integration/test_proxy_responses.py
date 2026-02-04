@@ -211,3 +211,58 @@ async def test_proxy_responses_streams_upstream(async_client, monkeypatch):
         log = result.scalars().first()
         assert log is not None
         assert log.request_id == request_id
+
+
+@pytest.mark.asyncio
+async def test_v1_responses_streams_event_sequence(async_client, monkeypatch):
+    email = "stream-seq@example.com"
+    raw_account_id = "acc_stream_seq"
+    auth_json = _make_auth_json(raw_account_id, email)
+    files = {"auth_json": ("auth.json", json.dumps(auth_json), "application/json")}
+    response = await async_client.post("/api/accounts/import", files=files)
+    assert response.status_code == 200
+
+    async def fake_stream(payload, headers, access_token, account_id, base_url=None, raise_for_status=False):
+        yield 'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n'
+        yield 'data: {"type":"response.output_text.delta","delta":"hi"}\n\n'
+        yield 'data: {"type":"response.function_call_arguments.delta","delta":"{}"}\n\n'
+        yield 'data: {"type":"response.refusal.delta","delta":"no"}\n\n'
+        yield 'data: {"type":"response.completed","response":{"id":"resp_1"}}\n\n'
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+
+    payload = {"model": "gpt-5.1", "instructions": "hi", "input": [], "stream": True}
+    async with async_client.stream("POST", "/v1/responses", json=payload) as resp:
+        assert resp.status_code == 200
+        lines = [line async for line in resp.aiter_lines() if line]
+
+    assert any("response.output_text.delta" in line for line in lines)
+    assert any("response.function_call_arguments.delta" in line for line in lines)
+    assert any("response.refusal.delta" in line for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_v1_responses_non_streaming_returns_response(async_client, monkeypatch):
+    email = "responses-nonstream@example.com"
+    raw_account_id = "acc_responses_nonstream"
+    auth_json = _make_auth_json(raw_account_id, email)
+    files = {"auth_json": ("auth.json", json.dumps(auth_json), "application/json")}
+    response = await async_client.post("/api/accounts/import", files=files)
+    assert response.status_code == 200
+
+    async def fake_stream(payload, headers, access_token, account_id, base_url=None, raise_for_status=False):
+        yield (
+            'data: {"type":"response.completed","response":{"id":"resp_1","object":"response",'
+            '"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}\n\n'
+        )
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+
+    payload = {"model": "gpt-5.1", "input": [{"role": "user", "content": "hi"}]}
+    resp = await async_client.post("/v1/responses", json=payload)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == "resp_1"
+    assert body["object"] == "response"
+    assert body["status"] == "completed"

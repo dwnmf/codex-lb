@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import AsyncIterator, Mapping, Protocol, TypeAlias
 
 import aiohttp
@@ -21,6 +22,12 @@ _ERROR_TYPE_CODE_MAP = {
     "usage_not_included": "usage_not_included",
     "insufficient_quota": "insufficient_quota",
     "quota_exceeded": "quota_exceeded",
+}
+
+_SSE_EVENT_TYPE_ALIASES = {
+    "response.text.delta": "response.output_text.delta",
+    "response.audio.delta": "response.output_audio.delta",
+    "response.audio_transcript.delta": "response.output_audio_transcript.delta",
 }
 
 
@@ -161,6 +168,25 @@ def _extract_upstream_message(data: dict) -> str | None:
     return None
 
 
+def _normalize_sse_line(line: str) -> str:
+    if not line.startswith("data:"):
+        return line
+    data = line[5:].strip()
+    if not data or data == "[DONE]":
+        return line
+    try:
+        payload = json.loads(data)
+    except json.JSONDecodeError:
+        return line
+    if not isinstance(payload, dict):
+        return line
+    event_type = payload.get("type")
+    if isinstance(event_type, str) and event_type in _SSE_EVENT_TYPE_ALIASES:
+        payload["type"] = _SSE_EVENT_TYPE_ALIASES[event_type]
+        return f"data: {json.dumps(payload, ensure_ascii=True, separators=(',', ':'))}\n\n"
+    return line
+
+
 async def stream_responses(
     payload: ResponsesRequest,
     headers: Mapping[str, str],
@@ -199,10 +225,11 @@ async def stream_responses(
 
             async for raw_line in _iter_sse_lines(resp, settings.stream_idle_timeout_seconds):
                 line = raw_line.decode("utf-8", errors="replace")
+                line = _normalize_sse_line(line)
                 event = parse_sse_event(line)
                 if event:
                     event_type = event.type
-                    if event_type in ("response.completed", "response.failed"):
+                    if event_type in ("response.completed", "response.failed", "response.incomplete"):
                         seen_terminal = True
                 yield line
     except ProxyResponseError:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.openai.message_coercion import coerce_messages
 from app.core.openai.requests import ResponsesRequest, ResponsesTextControls, ResponsesTextFormat
@@ -32,20 +33,33 @@ class ChatCompletionsRequest(BaseModel):
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
     store: bool | None = None
+    stream_options: ChatStreamOptions | None = None
 
     @model_validator(mode="after")
     def _validate_messages(self) -> "ChatCompletionsRequest":
         if not self.messages:
             raise ValueError("'messages' must be a non-empty list.")
+        for message in self.messages:
+            if not isinstance(message, Mapping):
+                raise ValueError("'messages' must contain objects.")
+            role = message.get("role")
+            role_name = role if isinstance(role, str) else None
+            content = message.get("content")
+            if role_name in ("system", "developer"):
+                _ensure_text_only_content(content, role_name)
+            elif role_name == "user":
+                _validate_user_content(content)
         return self
 
     def to_responses_request(self) -> ResponsesRequest:
         data = self.model_dump(mode="json", exclude_none=True)
         messages = data.pop("messages")
+        messages = _sanitize_user_messages(messages)
         data.pop("store", None)
         data.pop("max_tokens", None)
         data.pop("max_completion_tokens", None)
         response_format = data.pop("response_format", None)
+        stream_options = data.pop("stream_options", None)
         tools = _normalize_chat_tools(data.pop("tools", []))
         tool_choice = _normalize_tool_choice(data.pop("tool_choice", None))
         reasoning_effort = data.pop("reasoning_effort", None)
@@ -53,7 +67,11 @@ class ChatCompletionsRequest(BaseModel):
             data["reasoning"] = {"effort": reasoning_effort}
         if response_format is not None:
             _apply_response_format(data, response_format)
-        instructions, input_items = coerce_messages("", messages)
+        if isinstance(stream_options, Mapping):
+            include_obfuscation = stream_options.get("include_obfuscation")
+            if include_obfuscation is not None:
+                data["stream_options"] = {"include_obfuscation": include_obfuscation}
+        instructions, input_items = coerce_messages("", cast(list[JsonValue], messages))
         data["instructions"] = instructions
         data["input"] = input_items
         data["tools"] = tools
@@ -69,6 +87,15 @@ class ChatResponseFormatJsonSchema(BaseModel):
     schema_: JsonValue | None = Field(default=None, alias="schema")
     strict: bool | None = None
 
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+            raise ValueError("response_format.json_schema.name must match [A-Za-z0-9_-]{1,64}")
+        return value
+
 
 class ChatResponseFormat(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -81,6 +108,13 @@ class ChatResponseFormat(BaseModel):
         if self.type == "json_schema" and self.json_schema is None:
             raise ValueError("'response_format.json_schema' is required when type is 'json_schema'.")
         return self
+
+
+class ChatStreamOptions(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    include_usage: bool | None = None
+    include_obfuscation: bool | None = None
 
 
 def _normalize_chat_tools(tools: list[JsonValue]) -> list[JsonValue]:
@@ -170,3 +204,130 @@ def _text_format_from_parsed(parsed: ChatResponseFormat) -> ResponsesTextFormat:
     if parsed.type in ("json_object", "text"):
         return ResponsesTextFormat(type=parsed.type)
     raise ValueError(f"Unsupported response_format.type: {parsed.type}")
+
+
+def _ensure_text_only_content(content: JsonValue, role: str) -> None:
+    if content is None:
+        return
+    if isinstance(content, str):
+        return
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, str):
+                continue
+            if isinstance(part, Mapping):
+                part_map = cast(Mapping[str, JsonValue], part)
+                part_type = part_map.get("type")
+                if part_type not in (None, "text"):
+                    raise ValueError(f"{role} messages must be text-only.")
+                text = part_map.get("text")
+                if isinstance(text, str):
+                    continue
+            raise ValueError(f"{role} messages must be text-only.")
+        return
+    if isinstance(content, Mapping):
+        content_map = cast(Mapping[str, JsonValue], content)
+        part_type = content_map.get("type")
+        if part_type not in (None, "text"):
+            raise ValueError(f"{role} messages must be text-only.")
+        text = content_map.get("text")
+        if isinstance(text, str):
+            return
+    raise ValueError(f"{role} messages must be text-only.")
+
+
+def _validate_user_content(content: JsonValue) -> None:
+    if content is None or isinstance(content, str):
+        return
+    parts = content if isinstance(content, list) else [content]
+    for part in parts:
+        if isinstance(part, str):
+            continue
+        if not isinstance(part, Mapping):
+            raise ValueError("User message content parts must be objects.")
+        part_map = cast(Mapping[str, JsonValue], part)
+        part_type = part_map.get("type") or ("text" if "text" in part_map else None)
+        if part_type == "text":
+            text = part_map.get("text")
+            if not isinstance(text, str):
+                raise ValueError("Text content parts must include a string 'text'.")
+            continue
+        if part_type == "image_url":
+            image_url = part_map.get("image_url")
+            if not isinstance(image_url, Mapping):
+                raise ValueError("Image content parts must include image_url.url.")
+            image_map = cast(Mapping[str, JsonValue], image_url)
+            if not isinstance(image_map.get("url"), str):
+                raise ValueError("Image content parts must include image_url.url.")
+            continue
+        if part_type == "input_audio":
+            input_audio = part_map.get("input_audio")
+            if not isinstance(input_audio, Mapping):
+                raise ValueError("Audio content parts must include input_audio.")
+            audio_map = cast(Mapping[str, JsonValue], input_audio)
+            audio_format = audio_map.get("format")
+            if audio_format not in ("wav", "mp3"):
+                raise ValueError("Audio input format must be 'wav' or 'mp3'.")
+            continue
+        if part_type == "file":
+            file_info = part_map.get("file")
+            if not isinstance(file_info, Mapping):
+                raise ValueError("File content parts must include file metadata.")
+            continue
+        raise ValueError(f"Unsupported user content part type: {part_type}")
+
+
+def _sanitize_user_messages(messages: list[dict[str, JsonValue]]) -> list[dict[str, JsonValue]]:
+    sanitized: list[dict[str, JsonValue]] = []
+    for message in messages:
+        role = message.get("role")
+        if role != "user":
+            sanitized.append(message)
+            continue
+        content = message.get("content")
+        sanitized_content = _drop_oversized_images(content)
+        new_message = dict(message)
+        if sanitized_content is not None:
+            new_message["content"] = sanitized_content
+        sanitized.append(new_message)
+    return sanitized
+
+
+def _drop_oversized_images(content: JsonValue) -> JsonValue | None:
+    if content is None or isinstance(content, str):
+        return content
+    parts = content if isinstance(content, list) else [content]
+    sanitized_parts: list[JsonValue] = []
+    for part in parts:
+        if not isinstance(part, Mapping):
+            sanitized_parts.append(part)
+            continue
+        part_map = cast(Mapping[str, JsonValue], part)
+        part_type = part_map.get("type") or ("text" if "text" in part_map else None)
+        if part_type == "image_url":
+            image_url = part_map.get("image_url")
+            if isinstance(image_url, Mapping):
+                image_map = cast(Mapping[str, JsonValue], image_url)
+                url = image_map.get("url")
+            else:
+                url = None
+            if isinstance(url, str) and _is_oversized_data_url(url):
+                continue
+        sanitized_parts.append(part)
+    if isinstance(content, list):
+        return sanitized_parts
+    return sanitized_parts[0] if sanitized_parts else ""
+
+
+def _is_oversized_data_url(url: str) -> bool:
+    if not url.startswith("data:"):
+        return False
+    try:
+        header, data = url.split(",", 1)
+    except ValueError:
+        return False
+    if ";base64" not in header:
+        return False
+    padding = data.count("=")
+    size = (len(data) * 3) // 4 - padding
+    return size > 8 * 1024 * 1024

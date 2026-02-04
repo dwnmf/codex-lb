@@ -70,6 +70,24 @@ def test_tool_call_delta_is_emitted():
     assert done_chunks[-1]["choices"][0]["finish_reason"] == "tool_calls"
 
 
+def test_response_incomplete_maps_finish_reason_length():
+    lines = [
+        'data: {"type":"response.output_text.delta","delta":"hi"}\n\n',
+        (
+            'data: {"type":"response.incomplete","response":{"id":"r1",'
+            '"incomplete_details":{"reason":"max_output_tokens"}}}\n\n'
+        ),
+    ]
+    chunks = list(iter_chat_chunks(lines, model="gpt-5.2"))
+    parsed = [
+        json.loads(chunk[5:].strip())
+        for chunk in chunks
+        if chunk.startswith("data: ") and "chat.completion.chunk" in chunk
+    ]
+    done_chunks = [chunk for chunk in parsed if chunk["choices"][0].get("finish_reason") is not None]
+    assert done_chunks[-1]["choices"][0]["finish_reason"] == "length"
+
+
 @pytest.mark.asyncio
 async def test_stream_chat_chunks_preserves_tool_call_state():
     lines = [
@@ -97,6 +115,30 @@ async def test_stream_chat_chunks_preserves_tool_call_state():
     assert indices == [0, 1]
     done_chunks = [chunk for chunk in parsed_chunks if chunk["choices"][0].get("finish_reason") is not None]
     assert done_chunks[-1]["choices"][0]["finish_reason"] == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_chunks_include_usage_chunk():
+    lines = [
+        'data: {"type":"response.output_text.delta","delta":"hi"}\n\n',
+        (
+            'data: {"type":"response.completed","response":{"id":"r1","usage":'
+            '{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}\n\n'
+        ),
+    ]
+
+    async def _stream():
+        for line in lines:
+            yield line
+
+    chunks = [
+        json.loads(chunk[5:].strip())
+        for chunk in [c async for c in stream_chat_chunks(_stream(), model="gpt-5.2", include_usage=True)]
+        if chunk.startswith("data: ") and chunk.strip() != "data: [DONE]"
+    ]
+    assert all("usage" in chunk for chunk in chunks)
+    assert chunks[0]["usage"] is None
+    assert chunks[-1]["usage"]["total_tokens"] == 5
 
 
 @pytest.mark.asyncio

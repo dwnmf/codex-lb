@@ -52,6 +52,7 @@ class ChatCompletionChunk(BaseModel):
     created: int
     model: str
     choices: list[ChatChunkChoice]
+    usage: "ChatCompletionUsage | None" = None
 
 
 class ChatMessageToolCall(BaseModel):
@@ -192,6 +193,7 @@ def iter_chat_chunks(
     *,
     created: int | None = None,
     state: _ChatChunkState | None = None,
+    include_usage: bool = False,
 ) -> Iterable[str]:
     created = created or int(time.time())
     state = state or _ChatChunkState()
@@ -200,7 +202,7 @@ def iter_chat_chunks(
         if not payload:
             continue
         event_type = payload.get("type")
-        if event_type == "response.output_text.delta":
+        if event_type in ("response.output_text.delta", "response.refusal.delta"):
             delta = payload.get("delta")
             role = None
             if not state.sent_role:
@@ -220,7 +222,7 @@ def iter_chat_chunks(
                     )
                 ],
             )
-            yield _dump_chunk(chunk)
+            yield _dump_chunk(chunk, include_usage=include_usage)
             if role is not None:
                 state.sent_role = True
         tool_delta = _tool_call_delta_from_payload(payload, state.tool_index)
@@ -244,7 +246,7 @@ def iter_chat_chunks(
                     )
                 ],
             )
-            yield _dump_chunk(chunk)
+            yield _dump_chunk(chunk, include_usage=include_usage)
             if role is not None:
                 state.sent_role = True
         if event_type in ("response.failed", "error"):
@@ -264,8 +266,15 @@ def iter_chat_chunks(
                 yield _dump_sse(error_payload)
                 yield "data: [DONE]\n\n"
                 return
-        if event_type == "response.completed":
+        if event_type in ("response.completed", "response.incomplete"):
+            usage = None
+            if include_usage:
+                response = payload.get("response")
+                if isinstance(response, dict):
+                    usage = _map_usage(response.get("usage") if isinstance(response.get("usage"), dict) else None)
             finish_reason = "tool_calls" if state.saw_tool_call else "stop"
+            if event_type == "response.incomplete" and not state.saw_tool_call:
+                finish_reason = _finish_reason_from_incomplete(payload.get("response"))
             done = ChatCompletionChunk(
                 id="chatcmpl_temp",
                 created=created,
@@ -278,16 +287,36 @@ def iter_chat_chunks(
                     )
                 ],
             )
-            yield _dump_chunk(done)
+            yield _dump_chunk(done, include_usage=include_usage)
+            if include_usage:
+                usage_chunk = ChatCompletionChunk(
+                    id="chatcmpl_temp",
+                    created=created,
+                    model=model,
+                    choices=[],
+                    usage=usage,
+                )
+                yield _dump_chunk(usage_chunk, include_usage=include_usage)
             yield "data: [DONE]\n\n"
             return
 
 
-async def stream_chat_chunks(stream: AsyncIterator[str], model: str) -> AsyncIterator[str]:
+async def stream_chat_chunks(
+    stream: AsyncIterator[str],
+    model: str,
+    *,
+    include_usage: bool = False,
+) -> AsyncIterator[str]:
     created = int(time.time())
     state = _ChatChunkState()
     async for line in stream:
-        for chunk in iter_chat_chunks([line], model=model, created=created, state=state):
+        for chunk in iter_chat_chunks(
+            [line],
+            model=model,
+            created=created,
+            state=state,
+            include_usage=include_usage,
+        ):
             yield chunk
             if chunk.strip() == "data: [DONE]":
                 return
@@ -298,6 +327,7 @@ async def collect_chat_completion(stream: AsyncIterator[str], model: str) -> dic
     content_parts: list[str] = []
     response_id: str | None = None
     usage: dict[str, JsonValue] | None = None
+    incomplete_reason: str | None = None
     tool_index = ToolCallIndex()
     tool_calls: list[ToolCallState] = []
 
@@ -328,7 +358,7 @@ async def collect_chat_completion(stream: AsyncIterator[str], model: str) -> dic
             if error is not None:
                 return {"error": error}
             return cast(dict[str, JsonValue], openai_error("upstream_error", "Upstream error"))
-        if event_type == "response.completed":
+        if event_type in ("response.completed", "response.incomplete"):
             response = payload.get("response")
             if isinstance(response, dict):
                 response_id_value = response.get("id")
@@ -337,10 +367,13 @@ async def collect_chat_completion(stream: AsyncIterator[str], model: str) -> dic
                 usage_value = response.get("usage")
                 if isinstance(usage_value, dict):
                     usage = usage_value
+                if event_type == "response.incomplete":
+                    incomplete_reason = _finish_reason_from_incomplete(response)
 
     message_content = "".join(content_parts)
     message_tool_calls = _compact_tool_calls(tool_calls)
     has_tool_calls = bool(message_tool_calls)
+    finish_reason = "tool_calls" if has_tool_calls else (incomplete_reason or "stop")
     message = ChatCompletionMessage(
         role="assistant",
         content=message_content if message_content or not has_tool_calls else None,
@@ -349,7 +382,7 @@ async def collect_chat_completion(stream: AsyncIterator[str], model: str) -> dic
     choice = ChatCompletionChoice(
         index=0,
         message=message,
-        finish_reason="tool_calls" if has_tool_calls else "stop",
+        finish_reason=finish_reason,
     )
     completion = ChatCompletion(
         id=response_id or "chatcmpl_temp",
@@ -382,8 +415,10 @@ def _map_usage(usage: dict[str, JsonValue] | None) -> ChatCompletionUsage | None
     )
 
 
-def _dump_chunk(chunk: ChatCompletionChunk) -> str:
+def _dump_chunk(chunk: ChatCompletionChunk, *, include_usage: bool = False) -> str:
     payload = chunk.model_dump(mode="json", exclude_none=True)
+    if include_usage and "usage" not in payload:
+        payload["usage"] = None
     return _dump_sse(payload)
 
 
@@ -394,6 +429,21 @@ def _dump_completion(completion: ChatCompletion) -> dict[str, JsonValue]:
 
 def _dump_sse(payload: dict[str, JsonValue]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
+
+
+def _finish_reason_from_incomplete(response: JsonValue | None) -> str:
+    if not isinstance(response, Mapping):
+        return "stop"
+    response_map = cast(Mapping[str, JsonValue], response)
+    details = response_map.get("incomplete_details")
+    if isinstance(details, Mapping):
+        details_map = cast(Mapping[str, JsonValue], details)
+        reason = details_map.get("reason")
+        if reason == "max_output_tokens":
+            return "length"
+        if reason == "content_filter":
+            return "content_filter"
+    return "stop"
 
 
 def _tool_call_delta_from_payload(payload: Mapping[str, JsonValue], indexer: ToolCallIndex) -> ToolCallDelta | None:

@@ -15,6 +15,7 @@ def coerce_messages(existing_instructions: str, messages: list[JsonValue]) -> tu
         role_value = message_dict.get("role")
         role = role_value if isinstance(role_value, str) else None
         if role in ("system", "developer"):
+            _ensure_text_only_content(message_dict.get("content"), role)
             content_text = _content_to_text(message_dict.get("content"))
             if content_text:
                 instruction_parts.append(content_text)
@@ -58,3 +59,33 @@ def _content_to_text(content: object) -> str | None:
             return text
         return None
     return None
+
+
+def _ensure_text_only_content(content: object, role: str) -> None:
+    if content is None:
+        return
+    if isinstance(content, str):
+        return
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, str):
+                continue
+            if isinstance(part, dict):
+                part_dict = cast(dict[str, JsonValue], part)
+                part_type = part_dict.get("type")
+                if part_type not in (None, "text"):
+                    raise ValueError(f"{role} messages must be text-only.")
+                text = part_dict.get("text")
+                if isinstance(text, str):
+                    continue
+            raise ValueError(f"{role} messages must be text-only.")
+        return
+    if isinstance(content, dict):
+        content_dict = cast(dict[str, JsonValue], content)
+        part_type = content_dict.get("type")
+        if part_type not in (None, "text"):
+            raise ValueError(f"{role} messages must be text-only.")
+        text = content_dict.get("text")
+        if isinstance(text, str):
+            return
+    raise ValueError(f"{role} messages must be text-only.")

@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+* **proxy:** expand OpenAI Responses and Chat Completions compatibility (validation, streaming, usage)
+
+
+### Tests
+
+* add OpenAI and Codex client compatibility coverage
+
+
+### Documentation
+
+* add OpenAI compatibility notes and rollout checklist
+
 ## [0.5.1](https://github.com/Soju06/codex-lb/compare/v0.5.0...v0.5.1) (2026-02-03)
 
 

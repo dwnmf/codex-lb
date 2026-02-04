@@ -46,6 +46,47 @@ def test_extra_fields_are_preserved():
     assert "max_output_tokens" not in dumped
 
 
+def test_responses_accepts_string_input():
+    payload = {"model": "gpt-5.1", "instructions": "hi", "input": "hello"}
+    request = ResponsesRequest.model_validate(payload)
+
+    assert request.input == "hello"
+
+
+def test_responses_rejects_invalid_include_value():
+    payload = {
+        "model": "gpt-5.1",
+        "instructions": "hi",
+        "input": [],
+        "include": ["message.output_text.logprobs", "bad.include.value"],
+    }
+    with pytest.raises(ValueError, match="Unsupported include value"):
+        ResponsesRequest.model_validate(payload)
+
+
+def test_responses_accepts_known_include_values():
+    payload = {
+        "model": "gpt-5.1",
+        "instructions": "hi",
+        "input": [],
+        "include": ["reasoning.encrypted_content", "web_search_call.action.sources"],
+    }
+    request = ResponsesRequest.model_validate(payload)
+    assert request.include == ["reasoning.encrypted_content", "web_search_call.action.sources"]
+
+
+def test_responses_rejects_conversation_previous_response_id():
+    payload = {
+        "model": "gpt-5.1",
+        "instructions": "hi",
+        "input": [],
+        "conversation": "conv_1",
+        "previous_response_id": "resp_1",
+    }
+    with pytest.raises(ValueError, match="either 'conversation' or 'previous_response_id'"):
+        ResponsesRequest.model_validate(payload)
+
+
 def test_v1_messages_convert_to_responses_input():
     payload = {
         "model": "gpt-5.1",
@@ -93,6 +134,13 @@ def test_v1_messages_and_input_conflict():
         V1ResponsesRequest.model_validate(payload)
 
 
+def test_v1_input_string_passthrough():
+    payload = {"model": "gpt-5.1", "input": "hello"}
+    request = V1ResponsesRequest.model_validate(payload).to_responses_request()
+
+    assert request.input == "hello"
+
+
 def test_v1_compact_messages_convert():
     payload = {
         "model": "gpt-5.1",
@@ -103,3 +151,10 @@ def test_v1_compact_messages_convert():
     assert isinstance(request, ResponsesCompactRequest)
     assert request.instructions == ""
     assert request.input == [{"role": "user", "content": "hi"}]
+
+
+def test_v1_compact_input_string_passthrough():
+    payload = {"model": "gpt-5.1", "input": "hello"}
+    request = V1ResponsesCompactRequest.model_validate(payload).to_compact_request()
+
+    assert request.input == "hello"

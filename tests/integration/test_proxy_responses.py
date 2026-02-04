@@ -165,6 +165,16 @@ async def test_v1_responses_without_instructions(async_client):
 
 
 @pytest.mark.asyncio
+async def test_v1_responses_non_streaming_failed_returns_error(async_client):
+    payload = {"model": "gpt-5.1", "input": "hi"}
+    resp = await async_client.post("/v1/responses", json=payload)
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["error"]["code"] == "no_accounts"
+
+
+@pytest.mark.asyncio
 async def test_proxy_responses_streams_upstream(async_client, monkeypatch):
     email = "streamer@example.com"
     raw_account_id = "acc_live"

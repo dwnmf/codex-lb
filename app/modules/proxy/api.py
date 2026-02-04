@@ -144,6 +144,12 @@ async def _collect_responses(
         response_payload = await _collect_responses_payload(stream)
     except ProxyResponseError as exc:
         return JSONResponse(status_code=exc.status_code, content=exc.payload, headers=rate_limit_headers)
+    if isinstance(response_payload, dict) and response_payload.get("object") == "response":
+        status = response_payload.get("status")
+        if status == "failed":
+            error_payload = _error_envelope_from_response(response_payload.get("error"))
+            status_code = _status_for_error(error_payload.get("error"))
+            return JSONResponse(status_code=status_code, content=error_payload, headers=rate_limit_headers)
     if (
         isinstance(response_payload, dict)
         and "error" in response_payload
@@ -203,9 +209,16 @@ async def _prepend_first(first: str | None, stream: AsyncIterator[str]) -> Async
 
 
 def _parse_sse_payload(line: str) -> dict[str, JsonValue] | None:
-    if not line.startswith("data:"):
+    data = None
+    if line.startswith("data:"):
+        data = line[5:].strip()
+    elif "\n" in line:
+        for part in line.splitlines():
+            if part.startswith("data:"):
+                data = part[5:].strip()
+                break
+    if data is None:
         return None
-    data = line[5:].strip()
     if not data or data == "[DONE]":
         return None
     try:
@@ -231,3 +244,17 @@ async def _collect_responses_payload(stream: AsyncIterator[str]) -> dict[str, Js
     if response_payload is not None:
         return response_payload
     return cast(dict[str, JsonValue], openai_error("upstream_error", "Upstream error"))
+
+
+def _error_envelope_from_response(error_value: JsonValue | None) -> dict[str, JsonValue]:
+    if isinstance(error_value, dict):
+        return {"error": cast(dict[str, JsonValue], error_value)}
+    return cast(dict[str, JsonValue], openai_error("upstream_error", "Upstream error"))
+
+
+def _status_for_error(error_value: JsonValue | None) -> int:
+    if isinstance(error_value, dict):
+        code = error_value.get("code")
+        if code == "no_accounts":
+            return 503
+    return 502

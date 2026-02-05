@@ -186,7 +186,8 @@
 
 
                 <div class="multi-select" x-data="{ open: false }" @click.outside="open = false">
-                  <button type="button" class="filter-select multi-select-trigger" @click="open = !open"
+                  <button type="button" class="filter-select multi-select-trigger"
+                    @click="ensureRequestLogOptions(); open = !open"
                     :aria-expanded="open" :disabled="requestLogOptions.isLoading">
                     <span
                       x-text="multiSelectSummary(filtersDraft.accountIds, 'All accounts', 'account', 'accounts')"></span>
@@ -209,7 +210,8 @@
                 </div>
 
                 <div class="multi-select" x-data="{ open: false }" @click.outside="open = false">
-                  <button type="button" class="filter-select multi-select-trigger" @click="open = !open"
+                  <button type="button" class="filter-select multi-select-trigger"
+                    @click="ensureRequestLogOptions(); open = !open"
                     :aria-expanded="open" :disabled="requestLogOptions.isLoading">
                     <span
                       x-text="multiSelectSummary(filtersDraft.modelOptions, 'All models', 'model', 'models')"></span>

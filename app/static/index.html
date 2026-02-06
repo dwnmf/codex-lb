@@ -516,7 +516,6 @@
             <fieldset class="settings-fieldset">
               <legend>Sticky threads</legend>
               <input id="sticky-threads-toggle" type="checkbox" x-model="settings.stickyThreadsEnabled"
-                :disabled="settings.isLoading || settings.isSaving || !settings.hasLoaded"
                 aria-describedby="sticky-threads-help">
               <label for="sticky-threads-toggle">Enable sticky threads (reuse the same upstream account per
                 conversation)</label>
@@ -529,7 +528,6 @@
             <fieldset class="settings-fieldset">
               <legend>Reset priority</legend>
               <input id="reset-priority-toggle" type="checkbox" x-model="settings.preferEarlierResetAccounts"
-                :disabled="settings.isLoading || settings.isSaving || !settings.hasLoaded"
                 aria-describedby="reset-priority-help">
               <label for="reset-priority-toggle">Prefer accounts that reset earlier first</label>
               <div id="reset-priority-help" class="text-muted" style="margin-top: 6px">
@@ -538,16 +536,8 @@
               </div>
             </fieldset>
 
-            <template x-if="settings.isLoading && !settings.hasLoaded">
-              <div class="text-muted" style="margin-top: 6px">
-                Loading settings...
-                <span class="spinner animate" aria-hidden="true" style="display: inline-block; vertical-align: middle"></span>
-              </div>
-            </template>
-
             <div class="inline-actions" style="margin-top: 12px">
-              <button type="button" @click="saveSettings"
-                :disabled="settings.isSaving || settings.isLoading || !settings.hasLoaded">
+              <button type="button" @click="saveSettings" :disabled="settings.isSaving">
                 <span>Save</span>
               </button>
             </div>

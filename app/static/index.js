@@ -1407,8 +1407,12 @@
 			settings: {
 				stickyThreadsEnabled: false,
 				preferEarlierResetAccounts: false,
+				hasLoaded: false,
+				isLoading: false,
+				loadError: "",
 				isSaving: false,
 			},
+			settingsLoadPromise: null,
 			accounts: {
 				selectedId: "",
 				rows: [],
@@ -1465,11 +1469,39 @@
 				});
 
 				await this.loadData();
+				if (this.view === "settings") {
+					try {
+						await this.ensureSettingsLoaded();
+					} catch (error) {
+						this.openMessageBox({
+							tone: "error",
+							title: "Settings load failed",
+							message:
+								this.settings.loadError ||
+								error?.message ||
+								"Failed to load settings.",
+						});
+					}
+				}
 				this.syncTitle();
 				this.syncUrl(true);
-				this.$watch("view", () => {
+				this.$watch("view", async () => {
 					this.syncTitle();
 					this.syncUrl(false);
+					if (this.view === "settings") {
+						try {
+							await this.ensureSettingsLoaded();
+						} catch (error) {
+							this.openMessageBox({
+								tone: "error",
+								title: "Settings load failed",
+								message:
+									this.settings.loadError ||
+									error?.message ||
+									"Failed to load settings.",
+							});
+						}
+					}
 				});
 				this.$watch("accounts.searchQuery", () => {
 					this.syncAccountSearchSelection();
@@ -1761,13 +1793,68 @@
 					this.settings.preferEarlierResetAccounts = Boolean(
 						data.settings.preferEarlierResetAccounts,
 					);
+					this.settings.hasLoaded = true;
+					this.settings.loadError = "";
 				}
 				this.ui.usageWindows = buildUsageWindowConfig(data.summary);
 				this.dashboard = buildDashboardView(this);
 				this.syncAccountSearchSelection();
 			},
+			async ensureSettingsLoaded(options = {}) {
+				const { force = false } = options;
+				if (!force && this.settings.hasLoaded) {
+					return;
+				}
+				if (this.settingsLoadPromise) {
+					return this.settingsLoadPromise;
+				}
+				this.settings.isLoading = true;
+				this.settings.loadError = "";
+				this.settingsLoadPromise = (async () => {
+					const loaded = await fetchSettings();
+					this.settings.stickyThreadsEnabled = loaded.stickyThreadsEnabled;
+					this.settings.preferEarlierResetAccounts =
+						loaded.preferEarlierResetAccounts;
+					this.settings.hasLoaded = true;
+				})();
+				const promise = this.settingsLoadPromise;
+				try {
+					await promise;
+				} catch (error) {
+					this.settings.loadError =
+						error?.message || "Failed to load settings.";
+					throw error;
+				} finally {
+					this.settingsLoadPromise = null;
+					this.settings.isLoading = false;
+				}
+				return promise;
+			},
 			async saveSettings() {
 				if (this.settings.isSaving) {
+					return;
+				}
+				if (!this.settings.hasLoaded) {
+					try {
+						await this.ensureSettingsLoaded();
+					} catch (error) {
+						this.openMessageBox({
+							tone: "error",
+							title: "Settings not loaded",
+							message:
+								this.settings.loadError ||
+								error?.message ||
+								"Wait for settings to finish loading.",
+						});
+						return;
+					}
+				}
+				if (!this.settings.hasLoaded) {
+					this.openMessageBox({
+						tone: "error",
+						title: "Settings not loaded",
+						message: "Wait for settings to finish loading.",
+					});
 					return;
 				}
 				this.settings.isSaving = true;
@@ -1785,6 +1872,8 @@
 					this.settings.stickyThreadsEnabled = normalized.stickyThreadsEnabled;
 					this.settings.preferEarlierResetAccounts =
 						normalized.preferEarlierResetAccounts;
+					this.settings.hasLoaded = true;
+					this.settings.loadError = "";
 					this.openMessageBox({
 						tone: "success",
 						title: "Settings saved",

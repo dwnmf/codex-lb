@@ -49,6 +49,26 @@ def test_error_event_emits_done_chunk():
     assert chunks[-1].strip() == "data: [DONE]"
 
 
+@pytest.mark.asyncio
+async def test_collect_completion_parses_event_prefixed_sse_block():
+    lines = [
+        (
+            "event: response.failed\n"
+            'data: {"type":"response.failed","response":{"id":"r1","status":"failed","error":'
+            '{"message":"bad","type":"server_error","code":"no_accounts"}}}\n\n'
+        ),
+    ]
+
+    async def _stream():
+        for line in lines:
+            yield line
+
+    result = await collect_chat_completion(_stream(), model="gpt-5.2")
+    assert isinstance(result, OpenAIErrorEnvelope)
+    assert result.error is not None
+    assert result.error.code == "no_accounts"
+
+
 def test_tool_call_delta_is_emitted():
     lines = [
         (

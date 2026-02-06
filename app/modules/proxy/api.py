@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import AsyncIterator
 
@@ -26,6 +25,7 @@ from app.core.openai.parsing import parse_response_payload
 from app.core.openai.requests import ResponsesCompactRequest, ResponsesRequest
 from app.core.openai.v1_requests import V1ResponsesCompactRequest, V1ResponsesRequest
 from app.core.types import JsonValue
+from app.core.utils.sse import parse_sse_data_json
 from app.dependencies import ProxyContext, get_proxy_context
 from app.modules.proxy.schemas import ModelListItem, ModelListResponse, RateLimitStatusPayload
 
@@ -311,25 +311,7 @@ async def _prepend_first(first: str | None, stream: AsyncIterator[str]) -> Async
 
 
 def _parse_sse_payload(line: str) -> dict[str, JsonValue] | None:
-    data = None
-    if line.startswith("data:"):
-        data = line[5:].strip()
-    elif "\n" in line:
-        for part in line.splitlines():
-            if part.startswith("data:"):
-                data = part[5:].strip()
-                break
-    if data is None:
-        return None
-    if not data or data == "[DONE]":
-        return None
-    try:
-        payload = json.loads(data)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(payload, dict):
-        return payload
-    return None
+    return parse_sse_data_json(line)
 
 
 async def _collect_responses_payload(stream: AsyncIterator[str]) -> OpenAIResponseResult:

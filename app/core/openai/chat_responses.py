@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -9,7 +8,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.core.openai.models import OpenAIError, OpenAIErrorEnvelope, ResponseUsage
 from app.core.types import JsonValue
-from app.core.utils.json_guards import is_json_dict, is_json_mapping
+from app.core.utils.json_guards import is_json_mapping
+from app.core.utils.sse import format_sse_data, parse_sse_data_json
 
 
 class ChatToolCallFunction(BaseModel):
@@ -177,17 +177,7 @@ def _build_tool_call_function(name: str | None, arguments: str | None) -> ChatTo
 
 
 def _parse_data(line: str) -> dict[str, JsonValue] | None:
-    if line.startswith("data:"):
-        data = line[5:].strip()
-        if not data or data == "[DONE]":
-            return None
-        try:
-            payload = json.loads(data)
-        except json.JSONDecodeError:
-            return None
-        if is_json_dict(payload):
-            return payload
-    return None
+    return parse_sse_data_json(line)
 
 
 def iter_chat_chunks(
@@ -427,7 +417,7 @@ def _dump_chunk(chunk: ChatCompletionChunk, *, include_usage: bool = False) -> s
 
 
 def _dump_sse(payload: dict[str, JsonValue]) -> str:
-    return f"data: {json.dumps(payload)}\n\n"
+    return format_sse_data(payload)
 
 
 def _finish_reason_from_incomplete(response: JsonValue | None) -> str:

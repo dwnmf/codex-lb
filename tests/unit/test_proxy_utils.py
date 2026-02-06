@@ -73,6 +73,18 @@ def test_parse_sse_event_ignores_non_data_lines():
     assert parse_sse_event("event: ping\n") is None
 
 
+def test_parse_sse_event_concats_multiple_data_lines():
+    payload = {"type": "response.completed", "response": {"id": "resp_1"}}
+    raw = json.dumps(payload)
+    first, second = raw[: len(raw) // 2], raw[len(raw) // 2 :]
+    line = f"data: {first}\ndata: {second}\n\n"
+
+    event = parse_sse_event(line)
+
+    assert event is not None
+    assert event.type == "response.completed"
+
+
 def test_normalize_sse_event_block_rewrites_response_text_alias():
     block = 'data: {"type":"response.text.delta","delta":"hi"}\n\n'
 

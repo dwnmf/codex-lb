@@ -90,6 +90,7 @@ async def test_fetch_image_data_url_size_limit(monkeypatch):
         ("http://example.com/a.png", False),
         ("https://127.0.0.1/a.png", False),
         ("https://localhost/a.png", False),
+        ("https://100.64.0.1/a.png", False),
         ("https://169.254.169.254/a.png", False),
     ],
 )

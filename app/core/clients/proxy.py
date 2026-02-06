@@ -447,19 +447,9 @@ async def _resolves_to_blocked_ip(host: str, *, timeout_seconds: float) -> bool:
 
 
 def _is_disallowed_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    if ip.is_loopback:
-        return True
-    if ip.is_private:
-        return True
-    if ip.is_link_local:
-        return True
     if ip.is_multicast:
         return True
-    if ip.is_unspecified:
-        return True
-    if ip.is_reserved:
-        return True
-    return False
+    return not ip.is_global
 
 
 class ImageFetchContent(Protocol):

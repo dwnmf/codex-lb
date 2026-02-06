@@ -4,12 +4,12 @@ import json
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.core.openai.models import OpenAIError, OpenAIErrorEnvelope, ResponseUsage
 from app.core.types import JsonValue
+from app.core.utils.json_guards import is_json_dict, is_json_mapping
 
 
 class ChatToolCallFunction(BaseModel):
@@ -185,8 +185,8 @@ def _parse_data(line: str) -> dict[str, JsonValue] | None:
             payload = json.loads(data)
         except json.JSONDecodeError:
             return None
-        if isinstance(payload, dict):
-            return cast(dict[str, JsonValue], payload)
+        if is_json_dict(payload):
+            return payload
     return None
 
 
@@ -431,13 +431,11 @@ def _dump_sse(payload: dict[str, JsonValue]) -> str:
 
 
 def _finish_reason_from_incomplete(response: JsonValue | None) -> str:
-    if not isinstance(response, Mapping):
+    if not is_json_mapping(response):
         return "stop"
-    response_map = cast(Mapping[str, JsonValue], response)
-    details = response_map.get("incomplete_details")
-    if isinstance(details, Mapping):
-        details_map = cast(Mapping[str, JsonValue], details)
-        reason = details_map.get("reason")
+    details = response.get("incomplete_details")
+    if is_json_mapping(details):
+        reason = details.get("reason")
         if reason == "max_output_tokens":
             return "length"
         if reason == "content_filter":
@@ -559,17 +557,21 @@ def _extract_tool_call_fields(
             name = _first_str(function.get("name"))
 
     arguments = None
-    if isinstance(candidate.get("arguments"), str):
-        arguments = cast(str, candidate.get("arguments"))
+    candidate_arguments = candidate.get("arguments")
+    if isinstance(candidate_arguments, str):
+        arguments = candidate_arguments
     if arguments is None and isinstance(delta_text, str):
         arguments = delta_text
     if arguments is None and delta_map is not None:
-        if isinstance(delta_map.get("arguments"), str):
-            arguments = cast(str, delta_map.get("arguments"))
+        delta_arguments = delta_map.get("arguments")
+        if isinstance(delta_arguments, str):
+            arguments = delta_arguments
         else:
             function = _as_mapping(delta_map.get("function"))
-            if function is not None and isinstance(function.get("arguments"), str):
-                arguments = cast(str, function.get("arguments"))
+            if function is not None:
+                function_arguments = function.get("arguments")
+                if isinstance(function_arguments, str):
+                    arguments = function_arguments
 
     tool_type = _first_str(candidate.get("tool_type"), candidate.get("type"))
     if tool_type and tool_type.startswith("response."):
@@ -602,8 +604,8 @@ def _tool_call_key(call_id: str | None, name: str | None) -> str | None:
 
 
 def _as_mapping(value: JsonValue) -> Mapping[str, JsonValue] | None:
-    if isinstance(value, Mapping):
-        return cast(Mapping[str, JsonValue], value)
+    if is_json_mapping(value):
+        return value
     return None
 
 

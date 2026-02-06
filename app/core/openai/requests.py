@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.types import JsonObject, JsonValue
+from app.core.utils.json_guards import is_json_list, is_json_mapping
 
 _RESPONSES_INCLUDE_ALLOWLIST = {
     "code_interpreter_call.outputs",
@@ -35,10 +35,9 @@ def normalize_tool_type(tool_type: str) -> str:
 
 
 def normalize_tool_choice(choice: JsonValue | None) -> JsonValue | None:
-    if not isinstance(choice, Mapping):
+    if not is_json_mapping(choice):
         return choice
-    choice_map = cast(Mapping[str, JsonValue], choice)
-    tool_type = choice_map.get("type")
+    tool_type = choice.get("type")
     if isinstance(tool_type, str):
         normalized_type = normalize_tool_type(tool_type)
         if normalized_type != tool_type:
@@ -51,11 +50,10 @@ def normalize_tool_choice(choice: JsonValue | None) -> JsonValue | None:
 def validate_tool_types(tools: list[JsonValue]) -> list[JsonValue]:
     normalized_tools: list[JsonValue] = []
     for tool in tools:
-        if not isinstance(tool, Mapping):
+        if not is_json_mapping(tool):
             normalized_tools.append(tool)
             continue
-        tool_map = cast(Mapping[str, JsonValue], tool)
-        tool_type = tool_map.get("type")
+        tool_type = tool.get("type")
         if isinstance(tool_type, str):
             normalized_type = normalize_tool_type(tool_type)
             if normalized_type != tool_type:
@@ -70,23 +68,21 @@ def validate_tool_types(tools: list[JsonValue]) -> list[JsonValue]:
 
 def _has_input_file_id(input_items: list[JsonValue]) -> bool:
     for item in input_items:
-        if not isinstance(item, Mapping):
+        if not is_json_mapping(item):
             continue
-        item_map = cast(Mapping[str, JsonValue], item)
-        if _is_input_file_with_id(item_map):
+        if _is_input_file_with_id(item):
             return True
-        content = item_map.get("content")
-        if isinstance(content, list):
+        content = item.get("content")
+        if is_json_list(content):
             parts = content
-        elif isinstance(content, Mapping):
+        elif is_json_mapping(content):
             parts = [content]
         else:
             parts = []
         for part in parts:
-            if not isinstance(part, Mapping):
+            if not is_json_mapping(part):
                 continue
-            part_map = cast(Mapping[str, JsonValue], part)
-            if _is_input_file_with_id(part_map):
+            if _is_input_file_with_id(part):
                 return True
     return False
 
@@ -148,8 +144,8 @@ class ResponsesRequest(BaseModel):
             if _has_input_file_id(normalized):
                 raise ValueError("input_file.file_id is not supported")
             return normalized
-        if isinstance(value, list):
-            if _has_input_file_id(cast(list[JsonValue], value)):
+        if is_json_list(value):
+            if _has_input_file_id(value):
                 raise ValueError("input_file.file_id is not supported")
             return value
         raise ValueError("input must be a string or array")
@@ -224,8 +220,8 @@ class ResponsesCompactRequest(BaseModel):
             if _has_input_file_id(normalized):
                 raise ValueError("input_file.file_id is not supported")
             return normalized
-        if isinstance(value, list):
-            if _has_input_file_id(cast(list[JsonValue], value)):
+        if is_json_list(value):
+            if _has_input_file_id(value):
                 raise ValueError("input_file.file_id is not supported")
             return value
         raise ValueError("input must be a string or array")

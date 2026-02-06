@@ -1,26 +1,26 @@
 from __future__ import annotations
 
-from typing import cast
+from collections.abc import Sequence
 
 from app.core.types import JsonValue
+from app.core.utils.json_guards import is_json_dict, is_json_list
 
 
-def coerce_messages(existing_instructions: str, messages: list[JsonValue]) -> tuple[str, list[JsonValue]]:
+def coerce_messages(existing_instructions: str, messages: Sequence[JsonValue]) -> tuple[str, list[JsonValue]]:
     instruction_parts: list[str] = []
     input_messages: list[JsonValue] = []
     for message in messages:
-        if not isinstance(message, dict):
+        if not is_json_dict(message):
             raise ValueError("Each message must be an object.")
-        message_dict = cast(dict[str, JsonValue], message)
-        role_value = message_dict.get("role")
+        role_value = message.get("role")
         role = role_value if isinstance(role_value, str) else None
         if role in ("system", "developer"):
-            _ensure_text_only_content(message_dict.get("content"), role)
-            content_text = _content_to_text(message_dict.get("content"))
+            _ensure_text_only_content(message.get("content"), role)
+            content_text = _content_to_text(message.get("content"))
             if content_text:
                 instruction_parts.append(content_text)
             continue
-        input_messages.append(cast(JsonValue, _normalize_message_content(message_dict)))
+        input_messages.append(_normalize_message_content(message))
     merged = _merge_instructions(existing_instructions, instruction_parts)
     return merged, input_messages
 
@@ -41,20 +41,18 @@ def _content_to_text(content: JsonValue) -> str | None:
         return None
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
+    if is_json_list(content):
         parts: list[str] = []
         for part in content:
             if isinstance(part, str):
                 parts.append(part)
-            elif isinstance(part, dict):
-                part_dict = cast(dict[str, JsonValue], part)
-                text = part_dict.get("text")
+            elif is_json_dict(part):
+                text = part.get("text")
                 if isinstance(text, str):
                     parts.append(text)
         return "\n".join([part for part in parts if part])
-    if isinstance(content, dict):
-        content_dict = cast(dict[str, JsonValue], content)
-        text = content_dict.get("text")
+    if is_json_dict(content):
+        text = content.get("text")
         if isinstance(text, str):
             return text
         return None
@@ -66,26 +64,24 @@ def _ensure_text_only_content(content: JsonValue, role: str) -> None:
         return
     if isinstance(content, str):
         return
-    if isinstance(content, list):
+    if is_json_list(content):
         for part in content:
             if isinstance(part, str):
                 continue
-            if isinstance(part, dict):
-                part_dict = cast(dict[str, JsonValue], part)
-                part_type = part_dict.get("type")
+            if is_json_dict(part):
+                part_type = part.get("type")
                 if part_type not in (None, "text"):
                     raise ValueError(f"{role} messages must be text-only.")
-                text = part_dict.get("text")
+                text = part.get("text")
                 if isinstance(text, str):
                     continue
             raise ValueError(f"{role} messages must be text-only.")
         return
-    if isinstance(content, dict):
-        content_dict = cast(dict[str, JsonValue], content)
-        part_type = content_dict.get("type")
+    if is_json_dict(content):
+        part_type = content.get("type")
         if part_type not in (None, "text"):
             raise ValueError(f"{role} messages must be text-only.")
-        text = content_dict.get("text")
+        text = content.get("text")
         if isinstance(text, str):
             return
     raise ValueError(f"{role} messages must be text-only.")
@@ -108,17 +104,17 @@ def _normalize_content_parts(content: JsonValue) -> JsonValue:
         return content
     if isinstance(content, str):
         return [{"type": "input_text", "text": content}]
-    parts = content if isinstance(content, list) else [content]
+    parts = content if is_json_list(content) else [content]
     normalized_parts: list[JsonValue] = []
     for part in parts:
         if isinstance(part, str):
             normalized_parts.append({"type": "input_text", "text": part})
             continue
-        if not isinstance(part, dict):
+        if not is_json_dict(part):
             normalized_parts.append(part)
             continue
-        normalized_parts.append(_normalize_content_part(cast(dict[str, JsonValue], part)))
-    if isinstance(content, list):
+        normalized_parts.append(_normalize_content_part(part))
+    if is_json_list(content):
         return normalized_parts
     return normalized_parts[0] if normalized_parts else ""
 
@@ -154,11 +150,10 @@ def _normalize_content_part(part: dict[str, JsonValue]) -> JsonValue:
 
 
 def _audio_input_to_data_url(input_audio: JsonValue) -> str | None:
-    if not isinstance(input_audio, dict):
+    if not is_json_dict(input_audio):
         return None
-    audio_map = cast(dict[str, JsonValue], input_audio)
-    data = audio_map.get("data")
-    audio_format = audio_map.get("format")
+    data = input_audio.get("data")
+    audio_format = input_audio.get("format")
     if not isinstance(data, str) or not isinstance(audio_format, str):
         return None
     mime_type = _audio_mime_type(audio_format)
@@ -174,22 +169,21 @@ def _audio_mime_type(audio_format: str) -> str:
 
 
 def _file_part_to_input_file(file_info: JsonValue) -> dict[str, JsonValue]:
-    if not isinstance(file_info, dict):
+    if not is_json_dict(file_info):
         return {"type": "input_file"}
-    file_map = cast(dict[str, JsonValue], file_info)
-    file_id = file_map.get("file_id")
+    file_id = file_info.get("file_id")
     if isinstance(file_id, str) and file_id:
         return {"type": "input_file", "file_id": file_id}
-    file_url = file_map.get("file_url")
+    file_url = file_info.get("file_url")
     if isinstance(file_url, str) and file_url:
         return {"type": "input_file", "file_url": file_url}
-    file_data = file_map.get("file_data")
+    file_data = file_info.get("file_data")
     if not isinstance(file_data, str):
-        file_data = file_map.get("data") if isinstance(file_map.get("data"), str) else None
+        file_data = file_info.get("data") if isinstance(file_info.get("data"), str) else None
     if isinstance(file_data, str):
-        mime_type = file_map.get("mime_type")
+        mime_type = file_info.get("mime_type")
         if not isinstance(mime_type, str) or not mime_type:
-            mime_type = file_map.get("content_type")
+            mime_type = file_info.get("content_type")
         if not isinstance(mime_type, str) or not mime_type:
             mime_type = "application/octet-stream"
         return {"type": "input_file", "file_url": f"data:{mime_type};base64,{file_data}"}

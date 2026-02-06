@@ -389,6 +389,10 @@ class ImageFetchSession(Protocol):
     def get(self, url: str, timeout: aiohttp.ClientTimeout) -> AsyncContextManager[ImageFetchResponse]: ...
 
 
+def _as_image_fetch_session(session: aiohttp.ClientSession) -> ImageFetchSession:
+    return cast(ImageFetchSession, session)
+
+
 async def stream_responses(
     payload: ResponsesRequest,
     headers: Mapping[str, str],
@@ -412,7 +416,7 @@ async def stream_responses(
     client_session = session or get_http_client().session
     payload_dict = await _inline_input_image_urls(
         payload.to_payload(),
-        cast(ImageFetchSession, client_session),
+        _as_image_fetch_session(client_session),
         settings.upstream_connect_timeout_seconds,
     )
     try:
@@ -508,7 +512,7 @@ async def compact_responses(
     client_session = session or get_http_client().session
     payload_dict = await _inline_input_image_urls(
         payload.to_payload(),
-        cast(ImageFetchSession, client_session),
+        _as_image_fetch_session(client_session),
         settings.upstream_connect_timeout_seconds,
     )
     try:

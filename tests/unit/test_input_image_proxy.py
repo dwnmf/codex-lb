@@ -38,7 +38,11 @@ class FakeSession:
 
 
 @pytest.mark.asyncio
-async def test_fetch_image_data_url_success():
+async def test_fetch_image_data_url_success(monkeypatch):
+    async def resolve_ok(host: str, *, timeout_seconds: float) -> bool:
+        return False
+
+    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", resolve_ok)
     body = b"abc"
     response = FakeResponse(200, {"Content-Type": "image/png"}, [body])
     session = FakeSession(response)
@@ -50,7 +54,11 @@ async def test_fetch_image_data_url_success():
 
 
 @pytest.mark.asyncio
-async def test_fetch_image_data_url_failure_status():
+async def test_fetch_image_data_url_failure_status(monkeypatch):
+    async def resolve_ok(host: str, *, timeout_seconds: float) -> bool:
+        return False
+
+    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", resolve_ok)
     response = FakeResponse(404, {"Content-Type": "image/png"}, [b"abc"])
     session = FakeSession(response)
 
@@ -62,6 +70,11 @@ async def test_fetch_image_data_url_failure_status():
 @pytest.mark.asyncio
 async def test_fetch_image_data_url_size_limit(monkeypatch):
     monkeypatch.setattr(proxy_module, "_IMAGE_INLINE_MAX_BYTES", 4)
+
+    async def resolve_ok(host: str, *, timeout_seconds: float) -> bool:
+        return False
+
+    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", resolve_ok)
     response = FakeResponse(200, {"Content-Type": "image/png"}, [b"12345"])
     session = FakeSession(response)
 
@@ -80,40 +93,56 @@ async def test_fetch_image_data_url_size_limit(monkeypatch):
         ("https://169.254.169.254/a.png", False),
     ],
 )
-def test_is_safe_image_fetch_url(monkeypatch, url: str, expected: bool):
-    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", lambda host: False)
-    assert proxy_module._is_safe_image_fetch_url(url) is expected
+@pytest.mark.asyncio
+async def test_is_safe_image_fetch_url(monkeypatch, url: str, expected: bool):
+    async def resolve_ok(host: str, *, timeout_seconds: float) -> bool:
+        return False
+
+    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", resolve_ok)
+    assert await proxy_module._is_safe_image_fetch_url(url, connect_timeout=1.0) is expected
 
 
-def test_is_safe_image_fetch_url_blocks_resolved_private_ip(monkeypatch):
-    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", lambda host: host == "example.com")
-    assert proxy_module._is_safe_image_fetch_url("https://example.com/a.png") is False
+@pytest.mark.asyncio
+async def test_is_safe_image_fetch_url_blocks_resolved_private_ip(monkeypatch):
+    async def resolve_block(host: str, *, timeout_seconds: float) -> bool:
+        return host == "example.com"
+
+    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", resolve_block)
+    assert await proxy_module._is_safe_image_fetch_url("https://example.com/a.png", connect_timeout=1.0) is False
 
 
-def test_is_safe_image_fetch_url_respects_allowlist(monkeypatch):
-    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", lambda host: False)
+@pytest.mark.asyncio
+async def test_is_safe_image_fetch_url_respects_allowlist(monkeypatch):
+    async def resolve_ok(host: str, *, timeout_seconds: float) -> bool:
+        return False
+
+    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", resolve_ok)
     settings = proxy_module.get_settings()
     original = settings.image_inline_allowed_hosts
     original_enabled = settings.image_inline_fetch_enabled
     settings.image_inline_fetch_enabled = True
     settings.image_inline_allowed_hosts = ["allowed.example"]
     try:
-        assert proxy_module._is_safe_image_fetch_url("https://allowed.example/a.png") is True
-        assert proxy_module._is_safe_image_fetch_url("https://denied.example/a.png") is False
+        assert await proxy_module._is_safe_image_fetch_url("https://allowed.example/a.png", connect_timeout=1.0)
+        assert not await proxy_module._is_safe_image_fetch_url("https://denied.example/a.png", connect_timeout=1.0)
     finally:
         settings.image_inline_fetch_enabled = original_enabled
         settings.image_inline_allowed_hosts = original
 
 
-def test_is_safe_image_fetch_url_blocks_when_feature_disabled(monkeypatch):
-    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", lambda host: False)
+@pytest.mark.asyncio
+async def test_is_safe_image_fetch_url_blocks_when_feature_disabled(monkeypatch):
+    async def resolve_ok(host: str, *, timeout_seconds: float) -> bool:
+        return False
+
+    monkeypatch.setattr(proxy_module, "_resolves_to_blocked_ip", resolve_ok)
     settings = proxy_module.get_settings()
     original_enabled = settings.image_inline_fetch_enabled
     original_hosts = settings.image_inline_allowed_hosts
     settings.image_inline_fetch_enabled = False
     settings.image_inline_allowed_hosts = []
     try:
-        assert proxy_module._is_safe_image_fetch_url("https://example.com/a.png") is False
+        assert not await proxy_module._is_safe_image_fetch_url("https://example.com/a.png", connect_timeout=1.0)
     finally:
         settings.image_inline_fetch_enabled = original_enabled
         settings.image_inline_allowed_hosts = original_hosts

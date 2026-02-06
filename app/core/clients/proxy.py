@@ -349,7 +349,7 @@ async def _fetch_image_data_url(
     image_url: str,
     connect_timeout: float,
 ) -> str | None:
-    if not _is_safe_image_fetch_url(image_url):
+    if not await _is_safe_image_fetch_url(image_url, connect_timeout=connect_timeout):
         return None
     timeout = aiohttp.ClientTimeout(
         total=_IMAGE_INLINE_TIMEOUT_SECONDS,
@@ -381,7 +381,7 @@ async def _fetch_image_data_url(
         return None
 
 
-def _is_safe_image_fetch_url(url: str) -> bool:
+async def _is_safe_image_fetch_url(url: str, *, connect_timeout: float) -> bool:
     settings = get_settings()
     if not settings.image_inline_fetch_enabled:
         return False
@@ -406,7 +406,8 @@ def _is_safe_image_fetch_url(url: str) -> bool:
 
     if _is_blocked_ip_literal(host):
         return False
-    if _resolves_to_blocked_ip(host):
+    resolve_timeout = min(connect_timeout, _IMAGE_INLINE_TIMEOUT_SECONDS)
+    if await _resolves_to_blocked_ip(host, timeout_seconds=resolve_timeout):
         return False
     return True
 
@@ -419,10 +420,14 @@ def _is_blocked_ip_literal(host: str) -> bool:
     return _is_disallowed_ip(ip)
 
 
-def _resolves_to_blocked_ip(host: str) -> bool:
+async def _resolves_to_blocked_ip(host: str, *, timeout_seconds: float) -> bool:
+    loop = asyncio.get_running_loop()
     try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    except OSError:
+        infos = await asyncio.wait_for(
+            loop.getaddrinfo(host, None, proto=socket.IPPROTO_TCP),
+            timeout=timeout_seconds,
+        )
+    except (OSError, asyncio.TimeoutError):
         return True
     if not infos:
         return True

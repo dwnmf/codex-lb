@@ -202,3 +202,30 @@ def test_chat_oversized_image_is_dropped():
     assert responses.input == [
         {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
     ]
+
+
+def test_chat_image_detail_is_preserved_when_mapping_to_input_image():
+    payload = {
+        "model": "gpt-5.2",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/a.png", "detail": "high"},
+                    }
+                ],
+            }
+        ],
+    }
+
+    req = ChatCompletionsRequest.model_validate(payload)
+    responses = req.to_responses_request()
+
+    assert responses.input == [
+        {
+            "role": "user",
+            "content": [{"type": "input_image", "image_url": "https://example.com/a.png", "detail": "high"}],
+        }
+    ]

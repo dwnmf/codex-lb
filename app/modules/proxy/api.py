@@ -339,14 +339,34 @@ async def _collect_responses_payload(stream: AsyncIterator[str]) -> OpenAIRespon
         if not payload:
             continue
         event_type = payload.get("type")
+        if event_type == "error":
+            return _parse_event_error_envelope(payload)
         if event_type in ("response.completed", "response.incomplete", "response.failed"):
             response = payload.get("response")
             if isinstance(response, dict):
                 parsed = parse_response_payload(response)
                 if parsed is not None:
                     response_payload = parsed
+                    continue
+                if event_type == "response.failed":
+                    error_value = response.get("error")
+                    if isinstance(error_value, dict):
+                        try:
+                            return OpenAIErrorEnvelopeModel.model_validate({"error": error_value})
+                        except ValidationError:
+                            return _default_error_envelope()
     if response_payload is not None:
         return response_payload
+    return _default_error_envelope()
+
+
+def _parse_event_error_envelope(payload: dict[str, JsonValue]) -> OpenAIErrorEnvelopeModel:
+    error_value = payload.get("error")
+    if isinstance(error_value, dict):
+        try:
+            return OpenAIErrorEnvelopeModel.model_validate({"error": error_value})
+        except ValidationError:
+            return _default_error_envelope()
     return _default_error_envelope()
 
 

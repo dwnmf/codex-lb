@@ -129,14 +129,21 @@ def _normalize_content_part(part: dict[str, JsonValue]) -> JsonValue:
         return part
     if part_type == "image_url":
         image_url = part.get("image_url")
+        detail: str | None = None
         if isinstance(image_url, dict):
             url = image_url.get("url")
+            detail_value = image_url.get("detail")
+            if isinstance(detail_value, str):
+                detail = detail_value
         elif isinstance(image_url, str):
             url = image_url
         else:
             url = None
         if isinstance(url, str):
-            return {"type": "input_image", "image_url": url}
+            normalized: dict[str, JsonValue] = {"type": "input_image", "image_url": url}
+            if detail is not None:
+                normalized["detail"] = detail
+            return normalized
         return part
     if part_type == "input_image":
         return part

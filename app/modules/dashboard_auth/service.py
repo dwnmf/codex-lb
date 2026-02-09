@@ -32,6 +32,10 @@ class TotpInvalidCodeError(ValueError):
     pass
 
 
+class TotpInvalidSetupError(ValueError):
+    pass
+
+
 @dataclass(slots=True)
 class DashboardSessionState:
     expires_at: int
@@ -158,7 +162,10 @@ class DashboardAuthService:
         current = await self._repository.get_settings()
         if current.totp_secret_encrypted is not None:
             raise TotpAlreadyConfiguredError("TOTP is already configured. Disable it before setting a new secret")
-        verification = verify_totp_code(secret, code, window=1)
+        try:
+            verification = verify_totp_code(secret, code, window=1)
+        except ValueError as exc:
+            raise TotpInvalidSetupError("Invalid TOTP setup payload") from exc
         if not verification.is_valid:
             raise TotpInvalidCodeError("Invalid TOTP code")
         await self._repository.set_totp_secret(self._encryptor.encrypt(secret))
@@ -177,7 +184,9 @@ class DashboardAuthService:
         )
         if not verification.is_valid or verification.matched_step is None:
             raise TotpInvalidCodeError("Invalid TOTP code")
-        await self._repository.set_totp_last_verified_step(verification.matched_step)
+        updated = await self._repository.try_advance_totp_last_verified_step(verification.matched_step)
+        if not updated:
+            raise TotpInvalidCodeError("Invalid TOTP code")
         return self._session_store.create(totp_verified=True)
 
     async def disable_totp(self, code: str) -> None:

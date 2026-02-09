@@ -19,6 +19,7 @@ from app.modules.dashboard_auth.service import (
     DASHBOARD_SESSION_COOKIE,
     TotpAlreadyConfiguredError,
     TotpInvalidCodeError,
+    TotpInvalidSetupError,
     TotpNotConfiguredError,
     get_dashboard_session_store,
     get_totp_rate_limiter,
@@ -27,6 +28,9 @@ from app.modules.dashboard_auth.service import (
 router = APIRouter(prefix="/api/dashboard-auth", tags=["dashboard"])
 
 _SETUP_TOKEN_HEADER = "X-Codex-LB-Setup-Token"
+_FORWARDED_HEADER = "Forwarded"
+_X_FORWARDED_FOR_HEADER = "X-Forwarded-For"
+_X_REAL_IP_HEADER = "X-Real-Ip"
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -36,9 +40,62 @@ def _is_loopback_host(host: str) -> bool:
         return host == "localhost"
 
 
-def _require_setup_access(request: Request) -> JSONResponse | None:
+def _normalize_forwarded_host(raw: str) -> str | None:
+    value = raw.strip().strip('"')
+    if not value or value.lower() == "unknown" or value.startswith("_"):
+        return None
+    if value.startswith("["):
+        end = value.find("]")
+        if end < 0:
+            return None
+        return value[1:end]
+    if value.count(":") == 1:
+        host, port = value.rsplit(":", 1)
+        if port.isdigit():
+            return host
+    return value
+
+
+def _iter_forwarded_hosts(request: Request) -> list[str | None]:
+    hosts: list[str | None] = []
+
+    for raw_value in request.headers.getlist(_FORWARDED_HEADER):
+        for hop in raw_value.split(","):
+            for part in hop.split(";"):
+                key, sep, value = part.strip().partition("=")
+                if not sep or key.lower() != "for":
+                    continue
+                hosts.append(_normalize_forwarded_host(value))
+
+    x_forwarded_for = request.headers.get(_X_FORWARDED_FOR_HEADER, "")
+    for raw_value in x_forwarded_for.split(","):
+        if raw_value.strip():
+            hosts.append(_normalize_forwarded_host(raw_value))
+
+    x_real_ip = request.headers.get(_X_REAL_IP_HEADER, "")
+    if x_real_ip.strip():
+        hosts.append(_normalize_forwarded_host(x_real_ip))
+
+    return hosts
+
+
+def _is_direct_loopback_request(request: Request) -> bool:
     client_host = request.client.host if request.client else ""
-    if client_host and _is_loopback_host(client_host):
+    if not client_host or not _is_loopback_host(client_host):
+        return False
+
+    forwarded_hosts = _iter_forwarded_hosts(request)
+    if not forwarded_hosts:
+        return True
+
+    for host in forwarded_hosts:
+        if host is None or not _is_loopback_host(host):
+            return False
+    return True
+
+
+def _require_setup_access(request: Request) -> JSONResponse | None:
+    if _is_direct_loopback_request(request):
         return None
 
     token = get_settings().dashboard_setup_token
@@ -121,10 +178,16 @@ async def confirm_totp_setup(
             status_code=400,
             content=dashboard_error("invalid_totp_code", str(exc)),
         )
+    except TotpInvalidSetupError as exc:
+        limiter.record_failure(rate_key)
+        return JSONResponse(
+            status_code=400,
+            content=dashboard_error("invalid_totp_setup", str(exc)),
+        )
     except TotpAlreadyConfiguredError as exc:
         return JSONResponse(
             status_code=400,
-            content=dashboard_error("invalid_totp_code", str(exc)),
+            content=dashboard_error("invalid_totp_setup", str(exc)),
         )
     return JSONResponse(status_code=200, content={"status": "ok"})
 

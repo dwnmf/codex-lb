@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.core.auth.totp import generate_totp_code
@@ -22,6 +24,34 @@ async def test_cannot_enable_totp_requirement_without_configured_secret(async_cl
     assert response.status_code == 400
     payload = response.json()
     assert payload["error"]["code"] == "invalid_totp_config"
+
+
+@pytest.mark.asyncio
+async def test_setup_start_requires_token_for_forwarded_remote_client(async_client, monkeypatch):
+    monkeypatch.delenv("CODEX_LB_DASHBOARD_SETUP_TOKEN", raising=False)
+    from app.core.config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    response = await async_client.post(
+        "/api/dashboard-auth/totp/setup/start",
+        json={},
+        headers={"X-Forwarded-For": "198.51.100.7"},
+    )
+    assert response.status_code == 403
+    payload = response.json()
+    assert payload["error"]["code"] == "dashboard_setup_token_required"
+
+
+@pytest.mark.asyncio
+async def test_setup_confirm_rejects_invalid_secret(async_client):
+    response = await async_client.post(
+        "/api/dashboard-auth/totp/setup/confirm",
+        json={"secret": "%%%%", "code": "123456"},
+    )
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error"]["code"] == "invalid_totp_setup"
 
 
 @pytest.mark.asyncio
@@ -116,3 +146,64 @@ async def test_dashboard_totp_flow_enforces_auth_per_login(async_client, monkeyp
 
     allowed_again = await async_client.get("/api/settings")
     assert allowed_again.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_verify_rejects_one_of_concurrent_replays(async_client, monkeypatch):
+    current_epoch = {"value": 1_700_000_000}
+
+    import app.core.auth.totp as totp_module
+    import app.modules.dashboard_auth.repository as dashboard_auth_repository_module
+    import app.modules.dashboard_auth.service as dashboard_auth_service_module
+    from app.core.config.settings import get_settings
+
+    monkeypatch.setattr(totp_module, "time", lambda: current_epoch["value"])
+    monkeypatch.setattr(dashboard_auth_service_module, "time", lambda: current_epoch["value"])
+
+    monkeypatch.setenv("CODEX_LB_DASHBOARD_SETUP_TOKEN", "test-setup-token")
+    get_settings.cache_clear()
+
+    original_try_advance = dashboard_auth_repository_module.DashboardAuthRepository.try_advance_totp_last_verified_step
+
+    async def delayed_try_advance(self, step: int) -> bool:
+        await asyncio.sleep(0.05)
+        return await original_try_advance(self, step)
+
+    monkeypatch.setattr(
+        dashboard_auth_repository_module.DashboardAuthRepository,
+        "try_advance_totp_last_verified_step",
+        delayed_try_advance,
+    )
+
+    start = await async_client.post(
+        "/api/dashboard-auth/totp/setup/start",
+        json={},
+        headers={_SETUP_TOKEN_HEADER: "test-setup-token"},
+    )
+    assert start.status_code == 200
+    secret = start.json()["secret"]
+
+    setup_code = generate_totp_code(secret)
+    confirm = await async_client.post(
+        "/api/dashboard-auth/totp/setup/confirm",
+        json={"secret": secret, "code": setup_code},
+        headers={_SETUP_TOKEN_HEADER: "test-setup-token"},
+    )
+    assert confirm.status_code == 200
+
+    enable = await async_client.put(
+        "/api/settings",
+        json={
+            "stickyThreadsEnabled": False,
+            "preferEarlierResetAccounts": False,
+            "totpRequiredOnLogin": True,
+        },
+    )
+    assert enable.status_code == 200
+
+    verify_code = generate_totp_code(secret)
+    first, second = await asyncio.gather(
+        async_client.post("/api/dashboard-auth/totp/verify", json={"code": verify_code}),
+        async_client.post("/api/dashboard-auth/totp/verify", json={"code": verify_code}),
+    )
+    assert sorted([first.status_code, second.status_code]) == [200, 400]

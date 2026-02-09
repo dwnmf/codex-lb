@@ -27,7 +27,7 @@ async def test_cannot_enable_totp_requirement_without_configured_secret(async_cl
 
 
 @pytest.mark.asyncio
-async def test_setup_start_requires_token_for_forwarded_remote_client(async_client, monkeypatch):
+async def test_setup_start_requires_token_when_not_configured(async_client, monkeypatch):
     monkeypatch.delenv("CODEX_LB_DASHBOARD_SETUP_TOKEN", raising=False)
     from app.core.config.settings import get_settings
 
@@ -36,7 +36,6 @@ async def test_setup_start_requires_token_for_forwarded_remote_client(async_clie
     response = await async_client.post(
         "/api/dashboard-auth/totp/setup/start",
         json={},
-        headers={"X-Forwarded-For": "198.51.100.7"},
     )
     assert response.status_code == 403
     payload = response.json()
@@ -44,10 +43,32 @@ async def test_setup_start_requires_token_for_forwarded_remote_client(async_clie
 
 
 @pytest.mark.asyncio
-async def test_setup_confirm_rejects_invalid_secret(async_client):
+async def test_setup_start_requires_token_for_loopback_client_when_configured(async_client, monkeypatch):
+    monkeypatch.setenv("CODEX_LB_DASHBOARD_SETUP_TOKEN", "test-setup-token")
+    from app.core.config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    response = await async_client.post(
+        "/api/dashboard-auth/totp/setup/start",
+        json={},
+    )
+    assert response.status_code == 403
+    payload = response.json()
+    assert payload["error"]["code"] == "dashboard_setup_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_setup_confirm_rejects_invalid_secret(async_client, monkeypatch):
+    monkeypatch.setenv("CODEX_LB_DASHBOARD_SETUP_TOKEN", "test-setup-token")
+    from app.core.config.settings import get_settings
+
+    get_settings.cache_clear()
+
     response = await async_client.post(
         "/api/dashboard-auth/totp/setup/confirm",
         json={"secret": "%%%%", "code": "123456"},
+        headers={_SETUP_TOKEN_HEADER: "test-setup-token"},
     )
     assert response.status_code == 400
     payload = response.json()

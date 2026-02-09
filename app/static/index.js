@@ -1637,6 +1637,8 @@
 						this.settings.stickyThreadsEnabled = settings.stickyThreadsEnabled;
 						this.settings.preferEarlierResetAccounts =
 							settings.preferEarlierResetAccounts;
+						this.settings.totpRequiredOnLogin = settings.totpRequiredOnLogin;
+						this.settings.totpConfigured = settings.totpConfigured;
 						this.settings.hasLoaded = true;
 					} catch (err) {
 						console.error("Failed to load settings:", err);

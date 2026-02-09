@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hmac
-import ipaddress
 
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse
@@ -28,83 +27,16 @@ from app.modules.dashboard_auth.service import (
 router = APIRouter(prefix="/api/dashboard-auth", tags=["dashboard"])
 
 _SETUP_TOKEN_HEADER = "X-Codex-LB-Setup-Token"
-_FORWARDED_HEADER = "Forwarded"
-_X_FORWARDED_FOR_HEADER = "X-Forwarded-For"
-_X_REAL_IP_HEADER = "X-Real-Ip"
-
-
-def _is_loopback_host(host: str) -> bool:
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return host == "localhost"
-
-
-def _normalize_forwarded_host(raw: str) -> str | None:
-    value = raw.strip().strip('"')
-    if not value or value.lower() == "unknown" or value.startswith("_"):
-        return None
-    if value.startswith("["):
-        end = value.find("]")
-        if end < 0:
-            return None
-        return value[1:end]
-    if value.count(":") == 1:
-        host, port = value.rsplit(":", 1)
-        if port.isdigit():
-            return host
-    return value
-
-
-def _iter_forwarded_hosts(request: Request) -> list[str | None]:
-    hosts: list[str | None] = []
-
-    for raw_value in request.headers.getlist(_FORWARDED_HEADER):
-        for hop in raw_value.split(","):
-            for part in hop.split(";"):
-                key, sep, value = part.strip().partition("=")
-                if not sep or key.lower() != "for":
-                    continue
-                hosts.append(_normalize_forwarded_host(value))
-
-    x_forwarded_for = request.headers.get(_X_FORWARDED_FOR_HEADER, "")
-    for raw_value in x_forwarded_for.split(","):
-        if raw_value.strip():
-            hosts.append(_normalize_forwarded_host(raw_value))
-
-    x_real_ip = request.headers.get(_X_REAL_IP_HEADER, "")
-    if x_real_ip.strip():
-        hosts.append(_normalize_forwarded_host(x_real_ip))
-
-    return hosts
-
-
-def _is_direct_loopback_request(request: Request) -> bool:
-    client_host = request.client.host if request.client else ""
-    if not client_host or not _is_loopback_host(client_host):
-        return False
-
-    forwarded_hosts = _iter_forwarded_hosts(request)
-    if not forwarded_hosts:
-        return True
-
-    for host in forwarded_hosts:
-        if host is None or not _is_loopback_host(host):
-            return False
-    return True
 
 
 def _require_setup_access(request: Request) -> JSONResponse | None:
-    if _is_direct_loopback_request(request):
-        return None
-
     token = get_settings().dashboard_setup_token
     if not token:
         return JSONResponse(
             status_code=403,
             content=dashboard_error(
                 "dashboard_setup_token_required",
-                "Remote dashboard setup is disabled. Set CODEX_LB_DASHBOARD_SETUP_TOKEN to enable it.",
+                "Dashboard setup is disabled. Set CODEX_LB_DASHBOARD_SETUP_TOKEN to enable it.",
             ),
         )
 

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from sqlalchemy import or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DashboardSettings
 from app.modules.settings.repository import SettingsRepository
 
+_SETTINGS_ID = 1
+
 
 class DashboardAuthRepository:
     def __init__(self, session: AsyncSession) -> None:
+        self._session = session
         self._settings_repository = SettingsRepository(session)
 
     async def get_settings(self) -> DashboardSettings:
@@ -22,8 +26,18 @@ class DashboardAuthRepository:
         await self._settings_repository.commit_refresh(row)
         return row
 
-    async def set_totp_last_verified_step(self, step: int) -> DashboardSettings:
-        row = await self._settings_repository.get_or_create()
-        row.totp_last_verified_step = step
-        await self._settings_repository.commit_refresh(row)
-        return row
+    async def try_advance_totp_last_verified_step(self, step: int) -> bool:
+        await self._settings_repository.get_or_create()
+        result = await self._session.execute(
+            update(DashboardSettings)
+            .where(DashboardSettings.id == _SETTINGS_ID)
+            .where(
+                or_(
+                    DashboardSettings.totp_last_verified_step.is_(None),
+                    DashboardSettings.totp_last_verified_step < step,
+                )
+            )
+            .values(totp_last_verified_step=step)
+        )
+        await self._session.commit()
+        return bool(result.rowcount and result.rowcount > 0)

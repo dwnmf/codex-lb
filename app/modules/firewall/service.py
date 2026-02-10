@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
+from app.modules.firewall.repository import FirewallRepositoryConflictError
+
 
 class FirewallEntryLike(Protocol):
     ip_address: str
@@ -58,7 +60,10 @@ class FirewallService:
         normalized = normalize_ip_address(ip_address)
         if await self._repository.exists(normalized):
             raise FirewallIpAlreadyExistsError("IP address already exists")
-        row = await self._repository.add(normalized)
+        try:
+            row = await self._repository.add(normalized)
+        except FirewallRepositoryConflictError as exc:
+            raise FirewallIpAlreadyExistsError("IP address already exists") from exc
         return FirewallIpEntryData(ip_address=row.ip_address, created_at=row.created_at)
 
     async def remove_ip(self, ip_address: str) -> bool:

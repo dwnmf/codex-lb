@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.modules.firewall.repository import FirewallRepositoryConflictError
 from app.modules.firewall.service import (
     FirewallIpAlreadyExistsError,
     FirewallService,
@@ -56,6 +57,20 @@ def test_normalize_ip_address_normalizes_ipv6():
 async def test_add_ip_rejects_duplicates():
     service = FirewallService(_Repo())
     await service.add_ip("127.0.0.1")
+    with pytest.raises(FirewallIpAlreadyExistsError):
+        await service.add_ip("127.0.0.1")
+
+
+@pytest.mark.asyncio
+async def test_add_ip_maps_repository_conflict_to_exists_error():
+    class _ConflictRepo(_Repo):
+        async def exists(self, ip_address: str) -> bool:
+            return False
+
+        async def add(self, ip_address: str) -> _Entry:
+            raise FirewallRepositoryConflictError("duplicate")
+
+    service = FirewallService(_ConflictRepo())
     with pytest.raises(FirewallIpAlreadyExistsError):
         await service.add_ip("127.0.0.1")
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import secrets
 
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse
@@ -32,7 +31,7 @@ def _scope_key_for_start(request: Request) -> tuple[str, bool]:
     scope_key = request.cookies.get(OAUTH_SCOPE_COOKIE)
     if scope_key:
         return scope_key, False
-    return f"scope_{secrets.token_urlsafe(18)}", True
+    return _fallback_scope_key(request), True
 
 
 def _scope_key_from_request(request: Request) -> str:

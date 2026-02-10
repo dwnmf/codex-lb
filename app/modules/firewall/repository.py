@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import ApiFirewallAllowlist
+
+
+class FirewallRepositoryConflictError(ValueError):
+    pass
 
 
 class FirewallRepository:
@@ -27,7 +32,11 @@ class FirewallRepository:
     async def add(self, ip_address: str) -> ApiFirewallAllowlist:
         row = ApiFirewallAllowlist(ip_address=ip_address)
         self._session.add(row)
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            raise FirewallRepositoryConflictError("IP address already exists") from exc
         await self._session.refresh(row)
         return row
 

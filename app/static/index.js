@@ -2013,30 +2013,48 @@
 						preferEarlierResetAccounts: this.settings.preferEarlierResetAccounts,
 						totpRequiredOnLogin: this.settings.totpRequiredOnLogin,
 					};
-					const updated = await putJson(
-						API_ENDPOINTS.settings,
-						payload,
-						"save settings",
-					);
+					let updated;
+					try {
+						updated = await putJson(
+							API_ENDPOINTS.settings,
+							payload,
+							"save settings",
+						);
+					} catch (error) {
+						this.openMessageBox({
+							tone: "error",
+							title: "Settings save failed",
+							message: error.message || "Failed to save settings.",
+						});
+						return;
+					}
+
 					const normalized = normalizeSettingsPayload(updated);
 					this.settings.stickyThreadsEnabled = normalized.stickyThreadsEnabled;
 					this.settings.preferEarlierResetAccounts =
 						normalized.preferEarlierResetAccounts;
 					this.settings.totpRequiredOnLogin = normalized.totpRequiredOnLogin;
 					this.settings.totpConfigured = normalized.totpConfigured;
+
 					if (this.settings.totpRequiredOnLogin) {
-						await this.ensureDashboardAccess();
+						try {
+							await this.ensureDashboardAccess();
+						} catch (error) {
+							this.openMessageBox({
+								tone: "warning",
+								title: "Settings saved",
+								message:
+									error.message ||
+									"Settings were saved, but dashboard access verification was not completed.",
+							});
+							return;
+						}
 					}
+
 					this.openMessageBox({
 						tone: "success",
 						title: "Settings saved",
 						message: "Settings updated.",
-					});
-				} catch (error) {
-					this.openMessageBox({
-						tone: "error",
-						title: "Settings save failed",
-						message: error.message || "Failed to save settings.",
 					});
 				} finally {
 					this.settings.isSaving = false;

@@ -95,3 +95,37 @@ async def test_dashboard_totp_flow_enforces_auth_per_login(async_client):
 
     allowed_again = await async_client.get("/api/settings")
     assert allowed_again.status_code == 200
+
+    start_new = await async_client.post("/api/dashboard-auth/totp/setup/start", json={})
+    assert start_new.status_code == 200
+    new_secret = start_new.json()["secret"]
+
+    confirm_new = await async_client.post(
+        "/api/dashboard-auth/totp/setup/confirm",
+        json={"secret": new_secret, "code": generate_totp_code(new_secret)},
+    )
+    assert confirm_new.status_code == 200
+
+    reenable = await async_client.put(
+        "/api/settings",
+        json={
+            "stickyThreadsEnabled": False,
+            "preferEarlierResetAccounts": False,
+            "totpRequiredOnLogin": True,
+        },
+    )
+    assert reenable.status_code == 200
+
+    blocked_after_reenable = await async_client.get("/api/settings")
+    assert blocked_after_reenable.status_code == 401
+    blocked_after_reenable_payload = blocked_after_reenable.json()
+    assert blocked_after_reenable_payload["error"]["code"] == "totp_required"
+
+    verify_new = await async_client.post(
+        "/api/dashboard-auth/totp/verify",
+        json={"code": generate_totp_code(new_secret)},
+    )
+    assert verify_new.status_code == 200
+
+    allowed_after_reverify = await async_client.get("/api/settings")
+    assert allowed_after_reverify.status_code == 200

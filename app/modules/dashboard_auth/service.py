@@ -59,6 +59,13 @@ class DashboardSessionStore:
             return
         self._sessions.pop(session_id, None)
 
+    def invalidate_totp_verified_sessions(self) -> None:
+        self._sessions = {
+            session_id: state
+            for session_id, state in self._sessions.items()
+            if not state.totp_verified
+        }
+
 
 class DashboardAuthService:
     def __init__(self, repository: DashboardAuthRepository, session_store: DashboardSessionStore) -> None:
@@ -127,6 +134,7 @@ class DashboardAuthService:
         if not verification.is_valid:
             raise ValueError("Invalid TOTP code")
         await self._repository.set_totp_secret(None)
+        self._session_store.invalidate_totp_verified_sessions()
 
     def logout(self, session_id: str | None) -> None:
         self._session_store.delete(session_id)
